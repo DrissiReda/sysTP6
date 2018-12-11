@@ -8,6 +8,7 @@
 \usepackage{graphicx}
 \usepackage{hyperref}
 \usepackage{titlesec}
+\usepackage{xcolor}
 \usepackage{tcolorbox}
 \usepackage{amsmath}
 \usepackage{color}
@@ -49,7 +50,11 @@
   tabsize=3
 }}
 {}
-
+\lstset{basicstyle=\ttfamily,
+  showstringspaces=false,
+  commentstyle=\color{red},
+  keywordstyle=\color{blue}
+}
 \begin{document}
 \title{
   \begin{minipage}\linewidth
@@ -67,279 +72,267 @@
 \newpage
 \tableofcontents
 \newpage
-\section{Intégration dans l'infrastructure}
-Pour obtenir la machine \textit{server} nous allons simplement cloner la machine \textit{client}
-puisque la configuration à faire pour se connecter au routeur sera la même.\\
-Cependant il faudra :
-\begin{itemize}
-  \item Changer le nom d'hôte.
-  \item Nous changeons le fichier \texttt{/etc/network/interfaces} pour lui attribuer une adresse ip fixe. Nous
-    allons choisir l'adresse "192.168.0.11" qui est en dehors de la plage prise par le serveur DHCP.
-  \item Puis il faudra redémarrer les services réseaux avec la commande
-  \begin{tcolorbox}
-    \begin{verbatim}
-      $ systemctl restart networking
-    \end{verbatim}
-  \end{tcolorbox}
-  \item Nous rajoutons dans /etc/hosts
-  \begin{tcolorbox}
-    \begin{verbatim}
-      192.168.0.11    server.istycorp.fr
-    \end{verbatim}
-  \end{tcolorbox}
-  \item Nous redémarrons \textbf{dnsmasq}.
-\end{itemize}
-\section{Service SSH}
+\section{Stratégie De Sauvegarde}
 \subsection{Exercice 1}
-Nous rajoutons les nouvelles règles dans les paramètres de la VM :
-\begin{figure}[!htp]
-  \begin{tabular}{|c|c|c|c|c|c|}
-      \hline
-     Name & Protocol & Host IP & Host Port & Guest IP & Guest Port \\
-     \hline
-     Rule 1 & TCP & 127.0.0.1 & 9223 & 0.0.0.0 & 22 \\
-     \hline
-     Rule 2 & TCP & 127.0.0.1 & 9224 & 0.0.0.0 & 2222 \\
-     \hline
-  \end{tabular}
-\end{figure}
-
-Le package \textbf{openssh-server} est déjà installé.\\
-Nous rajoutons la nouvelle règle dans nos \textit{iptables} :
-\begin{tcolorbox}
-  \begin{verbatim}
-   $ iptables -t nat -A PREROUTING -p tcp -i enp0s3 --dport 2222
-   -j DNAT --to-destination 192.168.0.11:22
-   $ iptables-save > /etc/iptables/rules.v4
-  \end{verbatim}
-\end{tcolorbox}
+La sauvegarde incrémentale permet d'appliquer les changements qui ont été effectués depuis la
+dernière sauvegarde (uniquement les nouveaux fichiers, et les parties modifiés des fichiers déjà
+présents). Puisque cette sauvegarde copie uniquement les changements, elle est considérablement
+plus rapide que la sauvegarde complète. Le problème avec les sauvegardes incrémentales est que
+la restauration est faible, puisqu'il faut restorer la dernière sauvegarde complète, puis
+chaque sauvegarde incrémentale depuis, donc si nous avons une sauvegarde complète d'il y a un
+mois puis des sauvegardes incrémentales quotidiennes, il faudra restaurer la sauvegarde complète
+puis une trentaine de sauvegardes incrémentales, ce qui aussi bien évidemment implique des risques
+de données dans le cas où une ou plusieurs sauvegardes sont corrompues.
 
 \subsection{Exercice 2}
-Il faut créer un nouvel utilisateur \textbf{isty}. Puis luis créer une clé ssh et la copier vers
-la serveur, nous allons garder le nom de la clé par défaut : id\_rsa. \\
-Puis on se connecte par ssh à la VM serveur.
-\begin{tcolorbox}
-  \begin{verbatim}
-    $ adduser isty
-    $ usermod -aG sudo isty
-    $ su isty
-    $ ssh-keygen
-    $ ssh-copy-id -p 9224 isty@localhost
-    $ ssh -p 9224 isty@localhost
-  \end{verbatim}
-\end{tcolorbox}
+\begin{itemize}
+  \item Une sauvegarde complète chaque mois qui sera compressé dans un .tar.bz2, qui commence à 19h
+  \item Une sauvegarde differentielle chaque semaine qui commence à 19h chaque vendredi
+  \item Une sauvegarde incrémentale toutes les 4 heures
+\end{itemize}
+Nous choisissons 19h parce que c'est le temps où la plupart si pas tout le monde a quitté son bureau.
 
 \subsection{Exercice 3}
-Pour plus de sécurité Nous allons modifier le sshd\_config (fichier de configuration du serveur ssh).
-Nous allons interdire la connexion par mot de passe, et la connexion direct au compte root. \\
-Nous pouvons aussi changer d'autres options comme le fichier contenant les clés publiques des clients
-autorisés, ou bien forward le serveur X vers le client, etc.\\
-Nous décommentons puis modifions les lignes :
-\begin{tcolorbox}
-  \begin{verbatim}
-    PasswordAuthentication no
-    PermitRootLogin no
-    $ systemctl restart ssh
-  \end{verbatim}
-\end{tcolorbox}
 
+\begin{itemize}
+  \item Base de données MariaDB : Nous allons utiliser mysqldump au lieu d'une simple copie pour
+      éviter la corruption de transactions en cours. Notre base de données est presque vide, donc
+      elle ne doit pas dépasser les 1Mb.
+  \item Le répertoire \texttt{/home} est actuellement presque vide aussi, mais nous supposons un
+        total de 3Gb
+  \item Les données de l'application WordPress doivent être aux alentours de 60Mb au total :
+      \begin{itemize}
+        \item \texttt{/usr/share/wordpress/} 56Mb
+        \item \texttt{/etc/wordpress} <1Mb
+        \item \texttt{/var/lib/wordpress} <1Mb
+      \end{itemize}
+  \item Les données de l'annuaire LDAP contenus dans \texttt{/var/lib/ldap} qui eux aussi sont
+  inférieures à 1Mb
+\end{itemize}
 
 \subsection{Exercice 4}
-Nous allons installer fail2ban puis le tester, donc nous allons commenter la ligne \texttt{PasswordAuthentication}
-durant ce test, pour ensuite la remettre.
-\begin{tcolorbox}
-  \begin{verbatim}
-    $ sudo aptitude install fail2ban
-    $ ssh -p 9224 adminsys@localhost
-  \end{verbatim}
-\end{tcolorbox}
-Nous remarquons qu'au bout du 5ème essai nous sommes banni pendant 10 minutes.
-
+\begin{itemize}
+  \item Bandes magnétiques:
+    \begin{itemize}
+      \item \textbf{Avantages} : Grosses capacités, très grande durée de vie.
+      \item \textbf{Inconvénients} : Très lent, vulnérables aux aimans, même les plus faibles (ex
+      hauts parleurs)
+    \end{itemize}
+  \item Disques durs magnétiques SATA (HDD):
+    \begin{itemize}
+      \item \textbf{Avantages}: Disponibles partout, pour de très faibles coûts, relativement fiables,
+        compatibles partout.
+      \item \textbf{Inconvénients}: Usure à cause des parties amovibles, vitesse très lente.
+    \end{itemize}
+    \begin{itemize}
+  \item Stockages portables (hdd externes, clés usb)
+      \item \textbf{Avantages}: facilité de transport et d'usage
+      \item \textbf{Inconvénients}: capacité limitée, peu fiable, vitesse la plus lente après les
+      bandes magnétiques.
+    \end{itemize}
+    \begin{itemize}
+  \item Disques SSD SATA:
+      \item \textbf{Avantages}: Beaucoup plus rapides que les HDDs, aucune partie amovible,
+        température toujours basse.
+      \item \textbf{Inconvénients}: Prix coûteux, durée de vie relative aux nombres de lectures/
+      écritures
+    \end{itemize}
+    \begin{itemize}
+  \item Disques SSD NVMe PCIe/M.2:
+      \item \textbf{Avantages}: Beaucoup plus rapide que tout le reste
+      \item \textbf{Inconvénients}: Beaucoup plus chers que tout le reste
+    \end{itemize}
+\end{itemize}
 \subsection{Exercice 5}
-La ligne suivante a été ajoutée :
-\begin{tcolorbox}
-  \begin{verbatim}
-    -A f2b-sshd -s 10.0.2.2/32 -j REJECT --reject-with icmp-port-unreachable
-  \end{verbatim}
-\end{tcolorbox}
-\begin{itemize}
-  \item iptables permet de mettre en place des règles de traitement de paquets
-  \item -A pour "add" qui signifie ajouter en anglais permet de rajouter une règle.
-  \item f2b-sshd est le nom de la chaîne.
-  \item 10.0.2.2 est l'adresse de l'hôte sur le subnet de VirtualBox. Elle est bannie puisque nous.
-  avons tenté de nous connecter 4 fois sans succès.
-  \item -j REJECT signifie que la règle demande de rejeter les paquets en provenance de cette adresse.
-  \item --reject-with icmp-port-unreachable indique le type d'erreur à renvoyer.
-\end{itemize}
+Selon les supports, certains sont plus vulnérables à quelques conditions qu'à d'autres, et la
+plupart sont vulnérables à ce qui nuit à l'informatique de manière générale; telle la température
+élevée (ou trop basses), l'humidité, la poussière ou bien même les ondes électro-magnétiques.
 
+\section{Espace de stockage}
 \subsection{Exercice 6}
-Nous allons examiner les fichiers de log pour voir les tentatives de connexion:
-\begin{itemize}
-  \item \texttt{/var/log/auth.log}
-    \begin{verbatim}
-Nov  5 18:35:48 server sshd[891]: Failed password for isty from 10.0.2.2 port 58374 ssh2
-Nov  5 18:35:50 server sshd[891]: Failed password for isty from 10.0.2.2 port 58374 ssh2
-Nov  5 18:35:50 server sshd[891]: Connection closed by 10.0.2.2 port 58374 [preauth]
-Nov  5 18:36:52 server sshd[893]: Failed password for isty from 10.0.2.2 port 58375 ssh2
-Nov  5 18:36:52 server sshd[893]: Failed password for isty from 10.0.2.2 port 58375 ssh2
-Nov  5 18:36:52 server sshd[893]: Connection closed by 10.0.2.2 port 58375 [preauth]
-Nov  5 18:36:54 server sshd[895]: Failed password for isty from 10.0.2.2 port 58376 ssh2
-Nov  5 18:36:54 server sshd[895]: Failed password for isty from 10.0.2.2 port 58376 ssh2
-Nov  5 18:36:54 server sshd[895]: Connection closed by 10.0.2.2 port 58376 [preauth]
-
-    \end{verbatim}
-  \item \texttt{var/log/fail2ban.log}
-      \begin{verbatim}
-2018-11-05 18:35:48,868 fail2ban.filter         [830]: INFO    [sshd] Found 10.0.2.2
-2018-11-05 18:35:50,329 fail2ban.filter         [830]: INFO    [sshd] Found 10.0.2.2
-2018-11-05 18:36:52,537 fail2ban.filter         [830]: INFO    [sshd] Found 10.0.2.2
-2018-11-05 18:36:52,702 fail2ban.filter         [830]: INFO    [sshd] Found 10.0.2.2
-2018-11-05 18:36:54,187 fail2ban.filter         [830]: INFO    [sshd] Found 10.0.2.2
-2018-11-05 18:36:54,353 fail2ban.filter         [830]: INFO    [sshd] Found 10.0.2.2
-2018-11-05 18:36:54,371 fail2ban.actions        [830]: NOTICE  [sshd] Ban 10.0.2.2
-2018-11-05 18:46:54,906 fail2ban.actions        [830]: NOTICE  [sshd] Unban 10.0.2.2
-      \end{verbatim}
-  \end{itemize}
-On remarque que seulement deux tentatives apparaissent dans les logs alors qu'on a trois chances
-d'entrer notre mot de passe à chaque commande ssh.
-
+Nous avons déjà ajouter plusieurs disques durs sur virtualbox, ceci est trivial.
+Nous choisissons un disque de 4Gb, qui dépasse largement notre taille de sauvegarde.
 \subsection{Exercice 7}
-\begin{itemize}
-  \item Supprimer les logs ne peut pas affecter les adresses ip bannies, et ceci est normal.
-  \item Nous pouvons utiliser la commande suivante pour voir l'état des adresses bannies, puis les
-  autoriser à se connecter à nouveau:
-  \begin{tcolorbox}
-    \begin{verbatim}
-      $ fail2ban-client status sshd
-      $ fail2ban-client set sshd unbanip 10.0.2.2
-    \end{verbatim}
-  \end{tcolorbox}
-\end{itemize}
-\section{Apache / php / MySQL / WordPress }
-\subsection{Exercice 9}
-Nous allons installer apache php et mysql pour php, (aptitude trouvera le reste des packages dont nous avons besoin)
-puis rediriger le port 8080 de la machine hôte vers le port 80 de la machine client, ainsi
-nous pourrons accèder à notre serveur installé dans le client
-via le navigateur de l'hôte.
-
+Comme dans le TD2 nous allons utiliser parted ou fdisk ou cfdisk pour la création d'une partition.
+Puis nous exécutons les commandes nécessaires au formatage et configuration de fstab:
 \begin{tcolorbox}
   \begin{verbatim}
-    $ aptitude install apache2 php php-mysql php-pear
-    Add VM rule : TCP Rule 3 127.0.0.1  8080  0.0.0.0  80
-    $ iptables -t nat -A PREROUTING -p tcp -i enp0s3 --dport 80
-    -j DNAT --to-destination 192.168.0.11:80
-    $ iptables-save > /etc/iptables/rules.v4
+    $ mkfs.ext4 /dev/sdb1
+    $ mkdir /backups
+    $ echo " /dev/sdb1 /backups ext4 defaults 0 2" >> /etc/fstab
   \end{verbatim}
 \end{tcolorbox}
-Il est actuellement possible de voir la page d'acceuil par défaut d'apache sur le navigateur avec
-localhost:8080.\\
-\begin{figure}[!htp]
-  \includegraphics[scale=0.25]{resources/02.png}
-  \caption{Page d'acceuil "It Works" d'Apache}
-\end{figure}
-Nous pouvons ajouter une page d'infos php dans la racine du serveur apache (par défaut /var/www/).\\
-Puis nous activons les modules apache nécessaires avec \texttt{aen2mod}. \\
-\begin{tcolorbox}
-  \begin{verbatim}
-    $ echo -e "<?php\nphpinfo();\n?>" > /var/www/html/info.php
-    $ a2enmod mpm_prefork && a2enmod php7.0
-  \end{verbatim}
-\end{tcolorbox}
-Nous pouvons voir la page d'infos sur l'adresse \texttt{localhost:8080/info.php}
-\begin{figure}[!htp]
-  \includegraphics[scale=0.25]{resources/03.png}
-  \caption{Page d'infos sur la machine générée par PHP}
-\end{figure}
+\subsection{Exercice 8}
+Garder un seul support de stockage lie nos données à la fiabilité de ce support. Utiliser une méthode
+RAID pour une réplication de données ou un NAS, ou n'importe quelle autre méthode sera mieux adapté.
+
+\section{Sauvegarde}
 
 \subsection{Exercice 9}
-Installation du package \texttt{mysql-server}
+Nous utilisons \texttt{tree} pour montrer l'arborescence
+\begin{tcolorbox}
+  \begin{verbatim}
+    $ tree /backups
+/backups
+├── daily
+│   ├── daily.0 <- dossier
+│   └── daily.1 <- dossier
+├── increments
+├── monthly
+│   └── monthly_2018-12-11.tar.bz2 <- archive
+└── weekly
+    └── weekly.0 <- dossier
+  \end{verbatim}
+\end{tcolorbox}
+\newpage
 \subsection{Exercice 10}
-Configuration de MySQL avec \texttt{mysql\_secure\_installation}
+Nous évitons d'utiliser la varibale \texttt{\$PATH} parce que le script sera utilisé avec cron.
+\begin{tcolorbox}
+\begin{lstlisting}[language=bash]
+#!/bin/sh
+unset PATH
+DAY=$(($(date +%u) - 1))
+WEEK=$(($date +%w) - 1 ))
+MONTH=$(($date +%m) - 1 ))
+YEAR=$($date +%Y)
+RSYNC="/usr/bin/rsync"
+MKDIR="/bin/mkdir"
+TAR="/bin/tar"
+RM="/bin/rm"
+SOURCE="/backups/include.txt" #currently contains /home
+#can contain cache and other non important stuff
+EXCLUDES="/backups/exclude.txt"
+INCREMENTS="/backups/increments/$(date +%d-%m-%Y_%H:%M:%S)"
+DEST="/backups/daily/daily.$DAY"
+WEEKLY="/backups/weekly/weekly.$WEEK"
+OPTS="-arf --ignore-erros --delete --files-from=$SOURCE\
+      --exclude-from=$EXCLUDES"
+DOPTS="--backup --backup-dir=$INCREMENTS --log-file=\
+       /backups/log.daily.$(date+F%).log"
+WOPTS="$WEEKLY --log-file=/backups/log.weekly.$(date+F%).log"
+# Delete backups not needed
+if [ $DAY -eq 0 ]; then
+  # The following will only delete the folder if it's already full
+  $MKDIR -p /backups/weekly/weekly."$WEEK" && $RM -r\
+  /backups/weekly/weekly."$WEEK"/*
+  $RSYNC $OPTS $WOPTS $DEST
+  if [ $WEEK -eq 0]; then
+    MONTHLY = /backups/monthly/year."$YEAR"/monthly."$MONTH"
+    $MKDIR -p
+    $TAR -cpjf "$MONTHLY"/monthly_$(date +F%).tar.bz2 /home
+else
+  # The following will only delete the folder if it's already full
+  $MKDIR /backups/daily/daily."$DAY" && $RM -r\
+  /backups/daily/daily."$DAY"/*
+  $RSYNC $OPTS $DOPTS $DEST
+\end{lstlisting}
+\end{tcolorbox}
+Nous pouvons aussi utiliser des utils comme \texttt{rsnapshot} ou \texttt{duplicity} pour
+éviter toutes ces configurations.
 \subsection{Exercice 11}
-Installation du package \texttt{phpmyAdmin} puis choisir les bonnes options.\\
-Puis redémarrer le serveur apache et accèder à l'application web phpMyAdmin sur le lien : \\
-\texttt{localhost:8080/phpmyadmin}
+Nous aurons à répartir nos archives en de petits fichiers, la commande split sera parfaite pour
+ceci.
 
 \subsection{Exercice 12}
-\subsubsection{MySQL}
-Nous allons configurer la base de données mySQL (maintenant mariadb)
 \begin{tcolorbox}
-  \begin{verbatim}
-    $ mariadb
-    #nouveau utilisateur wpuser
-    $ CREATE USER 'wpuser'@'localhost' IDENTIFIED BY 'wpuser';`
-    #nouvelle db wpdb
-    $ CREATE DATABASE wpdb DEFAULT CHARACTER SET
-    'utf8' COLLATE 'utf8_unicode_ci';
-    #accorder toutes les permissions sur wpdb à wpuser
-    $ GRANT ALL ON `wpdb`.* TO `wpuser`@`localhost`;
-    #actualiser les tables de permissions
-    $ FLUSH PRIVILEGES;
-    $ exit
-  \end{verbatim}
+\begin{lstlisting}[language=bash]
+mysqldump --all-databases --add-drop-database --add-drop-table \
+--add-drop-trigger > /home/$USER/msqldump_$(date +%d-%m-%Y_%H:%M:%S).bak
+\end{lstlisting}
 \end{tcolorbox}
-\subsubsection{WordPress}
-Installation du package \texttt{wordpress}.
-Modification des fichiers \texttt{000-default.conf} et \texttt{default-ssl.conf} qui permettent
-de configurer les liens mis à disposition des clients par apache.\\
-Nous rajoutons les lignes suivantes sous la directive \texttt{DocumentRoot /var/www/html} :
-\begin{tcolorbox}
-  \begin{verbatim}
-  Alias /istyblog /usr/share/wordpress
-  <Directory /usr/share/wordpress>
-      Options FollowSymLinks
-      AllowOverride Limit Options FileInfo
-      DirectoryIndex index.php
-      Require all granted
-  </Directory>
-  <Directory /usr/share/wordpress/wp-content>
-      Options FollowSymLinks
-      Require all granted
-  </Directory>
-  ---------------------------------------------------
-  Recharger apache avec :
-  $ systemctl reload apache2
-  \end{verbatim}
-\end{tcolorbox}
-Configurer le site pour utiliser MySQL/MariaDB dans /etc/wordpress/config-localhost.php :
-\begin{tcolorbox}
-  \begin{verbatim}
-  <?php
-  define('DB_NAME', 'wpdb');
-  define('DB_USER', 'wpuser');
-  define('DB_PASSWORD', 'wpuser');
-  define('DB_HOST', 'localhost');
-  define('WP_CONTENT_DIR', '/usr/share/wordpress/wp-content');
-  ?>
-  \end{verbatim}
-\end{tcolorbox}
-
+Ensuite elle sera sauvegardée avec le reste du home
 \subsection{Exercice 13}
-Il faudra rajouter une nouvelle règle pour rediriger le port 443 afin d'utiliser https .\\
-Puis utiliser iptables comme avant, et activer le module ssl d'apache.
+Si nous copions les fichiers d'une base de données alors qu'une transaction est en cours, nous
+risquons de corrompre les données de cette DB.
+Plusieurs solutions existent:
+\begin{itemize}
+  \item L'usage d'une sauvegarde logique avec un outil comme mysqldump.
+  \item Verrouiller la base de données en lecture seule durant la sauvegarde.
+  \item Arrêter la base de données lors de la sauvegarde.
+  \item L'usage de la fonctionnalité snapshot si le système de fichiers le permets (zfs ou btrfs)
+\end{itemize}
+\subsection{Exercice 14}
+La taille de la sauvegarde va causer une opération de sauvegarde très lente. Nous avons donc encore
+plus de risque de corruption de cette base de données.\\
+Les solutions que nous pouvons adopter:
+\begin{itemize}
+\item Usage de quelques outils plus rapides.
+\item Verrouiller la base de données en lecture seule.
+\item Usage de la fonctionnalité de snapshot, si possible.
+\end{itemize}
+\subsection{Exercice 15}
+Ajouter les fichiers de ldap (/var/lib/ldap)dans le fichier "/backups/include.txt"
+\subsection{Exercice 16}
+Nous pouvons générer ces checksums avec la commande :
 \begin{tcolorbox}
   \begin{verbatim}
-  $ Adding rule  Rule 4  TCP  127.0.0.1  9443  0.0.0.0  443
-  $ iptables -t nat -A PREROUTING -p tcp -i enp0s3 --dport 443
-    -j DNAT --to-destination 192.168.0.11:443
-  $ iptables-save > /etc/iptables/rules.v4
-  $ a2ensite default-ssl
-  $ a2enmod ssl
-  $ systemctl restart apache2
+find /path/to/backup -type f -exec md5sum {} + > /path/to/backup/checksum.md5
+\end{verbatim}
+\end{tcolorbox}
+Nous pouvons les vérifier avec
+\begin{tcolorbox}
+  \begin{verbatim}
+    md5sum -c /path/to/backup/checksum.md5
   \end{verbatim}
 \end{tcolorbox}
-Nous pouvons accèder à notre site d'acceuil avec https via : \texttt{https://localhost:9443}.
-Cependant notre site wordpress ne fonctionne pas, il faudra changer les champs WordPress Address
-et Site Address en modifiant le port et en mettant \textit{https} au lieu de \textit{http} dans
-Settings > General.\\
-Nous remarquons que l'émetteur du certificat SSL n'est pas reconnu.\\
-
-\subsection{Exercice 14}
-Si un attaquant parvient à obtenir la clé privée de notre paire, il peut voler l'identité du site,
-puis voler les données des visiteurs du sites, et autres informations.
-
+\subsection{Exercice 17}
 \begin{tcolorbox}
   \begin{verbatim}
+    $ crontab -e
+    * 0 * * * /path/to/script
+  \end{verbatim}
+\end{tcolorbox}
+\section{Restauration}
+\subsection{Exercice 18}
+Génération d'un backup complet :
+\begin{tcolorbox}
+\begin{lstlisting}[language=bash]
+    SOURCE="/home /var/lib/ldap \
+            /usr/share/wordpress
+            /etc/wordpress/
+            /var/lib/wordpress/"
+    DAY= $(($(date +%u) - 1 ))
+    mkdir /backups/daily/daily.$DAY
+    mysqldump --all-databases --add-drop-database --add-drop-table \
+    --add-drop-trigger >/home/$USER/msqldump_$(date +%d-%m-%Y_%H:%M:%S).bak
+    rsync -arf --ignore-erros --delete $SOURCE /backups/daily/daily.$DAY
+\end{lstlisting}
+\end{tcolorbox}
+Génération d'un backup incrémental:
+\begin{tcolorbox}
+  \begin{verbatim}
+    $ bash /root/backing_up.sh
+  \end{verbatim}
+\end{tcolorbox}
+\subsection{Exercice 19}
+Après avoir transféré les fichiers, nous commençons tout d'abord par bien vérifier
+nos hashs md5 avec la commande :
+\begin{tcolorbox}
+  \begin{verbatim}
+    $ md5sum -c /backups/daily/daily.1/checksum.md5
+  \end{verbatim}
+\end{tcolorbox}
+Nous restaurons le backup:
+\begin{tcolorbox}
+  \begin{verbatim}
+    DAY= $(($(date +%u) - 1 ))
+    rsync -arf --ignore-erros --delete /backups/daily/daily.$DAY /
+  \end{verbatim}
+\end{tcolorbox}
+Puis les données de notre base de données:
+\begin{tcolorbox}
+  \begin{verbatim}
+    mysql > source /home/adminsys/msqldump_11-12-2018_19:48:35.bak
+  \end{verbatim}
+\end{tcolorbox}
+\subsection{Exercice 20}
+Pour se le faire nous allons faire la même chose que lorsqu'on restaure une sauvegarde normale,
+le seul changement est de copier le répertoire htop-dev uniquement au lieu du backup complet.
+\begin{tcolorbox}
+  \begin{verbatim}
+    rsync -arf --ignore-erros --delete \
+    /backups/path/to/needed/backup/home/raj/htop-dev \
+    /home/raj
   \end{verbatim}
 \end{tcolorbox}
 \end{document}
